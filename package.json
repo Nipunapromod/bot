@@ -1,0 +1,12 @@
+{
+  "name": "whatsapp-multicommand-bot",
+  "version": "1.0.0",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "dependencies": {
+    "venom-bot": "^4.0.0",
+    "node-fetch": "^2.6.1"
+  }
+}
