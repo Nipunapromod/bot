@@ -1,41 +1,50 @@
 const venom = require('venom-bot');
+const express = require('express');
 const fs = require('fs');
+const app = express();
 const path = require('path');
 
-// Load all commands dynamically from commands folder
-const commands = {};
-const commandsPath = path.join(__dirname, 'commands');
-fs.readdirSync(commandsPath).forEach(file => {
-  if (file.endsWith('.js')) {
-    const commandName = file.replace('.js', '');
-    commands[commandName] = require(path.join(commandsPath, file));
-  }
-});
+// Store QR code as base64
+let qrCodeBase64 = '';
 
 venom
-  .create()
-  .then(client => start(client))
-  .catch(console.error);
+  .create({
+    session: 'session-bot',
+    catchQR: (base64Qrimg) => {
+      qrCodeBase64 = base64Qrimg;
+      console.log('QR Code updated');
+    },
+    browserArgs: ['--no-sandbox']
+  })
+  .then((client) => start(client))
+  .catch((error) => console.log(error));
 
-async function start(client) {
-  client.onMessage(async message => {
-    if (message.type === 'chat' && message.body) {
-      // Commands start with "."
-      if (!message.body.startsWith('.')) return;
+function start(client) {
+  client.onMessage(async (message) => {
+    if (!message.body.startsWith('.')) return;
 
-      const [cmdName, ...args] = message.body.slice(1).split(' ');
-      const command = commands[cmdName];
-
-      if (command) {
-        try {
-          await command.run(client, message, args);
-        } catch (err) {
-          console.error(err);
-          await client.sendText(message.from, 'Error running command.');
-        }
-      } else {
-        await client.sendText(message.from, 'Unknown command. Try .help');
-      }
+    const commandName = message.body.split(' ')[0].substring(1);
+    try {
+      const command = require(`./commands/${commandName}.js`);
+      await command.run(client, message);
+    } catch (err) {
+      console.log(`Command ${commandName} not found.`);
     }
   });
 }
+
+// Express route to show QR code
+app.get('/qr', (req, res) => {
+  if (!qrCodeBase64) return res.send('QR not ready. Please wait...');
+  const html = `
+    <html>
+      <body style="text-align:center;">
+        <h2>Scan the WhatsApp QR Code</h2>
+        <img src="${qrCodeBase64}" />
+      </body>
+    </html>`;
+  res.send(html);
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
