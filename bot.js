@@ -96,6 +96,24 @@ async function handleMessage(message) {
   }
 }
 
+
+function validDashboardSession(req) {
+  if (!config.dashboardPassword || !config.dashboardSessionSecret) return false;
+  const cookie = req.headers.cookie || '';
+  const token = cookie.split(';').map(v => v.trim()).find(v => v.startsWith('npdash='));
+  if (!token) return false;
+  const value = decodeURIComponent(token.slice(7));
+  const [expires, signature] = value.split('.');
+  if (!expires || !signature || Number(expires) < Date.now()) return false;
+  const expected = crypto.createHmac('sha256', config.dashboardSessionSecret).update(expires).digest('hex');
+  const a = Buffer.from(signature);
+  const b = Buffer.from(expected);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+function requireDashboard(req, res, next) {
+  if (validDashboardSession(req)) return next();
+  return res.status(401).json({ error: 'Dashboard login required' });
+}
 function statusPayload() {
   return {
     service: 'Nipuna WhatsApp AI',
@@ -104,12 +122,30 @@ function statusPayload() {
     aiConfigured: Boolean(config.openaiApiKey),
     webSearchConfigured: Boolean(config.tavilyApiKey),
     databaseConfigured: Boolean(config.supabaseUrl && config.supabaseServiceRoleKey),
-    dashboardPasswordConfigured: Boolean(config.dashboardPassword),
+    dashboardPasswordConfigured: Boolean(config.dashboardPassword && config.dashboardSessionSecret),
     webhookPath: '/api/webhook'
   };
 }
 app.get(['/health', '/api/health'], (req, res) => res.json({ ok: true, ...statusPayload() }));
-app.get('/api/status', (req, res) => res.json(statusPayload()));
+
+app.post('/api/login', (req, res) => {
+  const password = String(req.body?.password || '');
+  if (!config.dashboardPassword || !config.dashboardSessionSecret) {
+    return res.status(503).json({ error: 'Set DASHBOARD_PASSWORD and DASHBOARD_SESSION_SECRET in Vercel first.' });
+  }
+  const a = Buffer.from(password);
+  const b = Buffer.from(config.dashboardPassword);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return res.status(401).json({ error: 'Incorrect password' });
+  const expires = String(Date.now() + 12 * 60 * 60 * 1000);
+  const signature = crypto.createHmac('sha256', config.dashboardSessionSecret).update(expires).digest('hex');
+  res.setHeader('Set-Cookie', 'npdash=' + encodeURIComponent(expires + '.' + signature) + '; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=43200');
+  return res.json({ ok: true });
+});
+app.post('/api/logout', (req, res) => {
+  res.setHeader('Set-Cookie', 'npdash=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0');
+  res.json({ ok: true });
+});
+app.get('/api/status', requireDashboard, (req, res) => res.json(statusPayload()));
 app.get(['/webhook', '/api/webhook'], (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
