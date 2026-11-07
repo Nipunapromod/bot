@@ -22,7 +22,6 @@ function verifySignature(req) {
   const received = Buffer.from(signature.slice(7), 'hex');
   return received.length === expected.length && crypto.timingSafeEqual(received, expected);
 }
-
 function allowedByRateLimit(sender) {
   const now = Date.now();
   const recent = (userWindows.get(sender) || []).filter(time => now - time < 60_000);
@@ -34,7 +33,6 @@ function allowedByRateLimit(sender) {
   userWindows.set(sender, recent);
   return true;
 }
-
 function rememberMessage(id) {
   if (seenMessages.has(id)) return false;
   seenMessages.set(id, Date.now());
@@ -45,14 +43,12 @@ function rememberMessage(id) {
   }
   return true;
 }
-
 function extractText(message) {
   if (message.type === 'text') return message.text?.body?.trim() || '';
   if (message.type === 'button') return message.button?.text?.trim() || '';
   if (message.type === 'interactive') return message.interactive?.button_reply?.title || message.interactive?.list_reply?.title || '';
   return '';
 }
-
 async function handleMessage(message) {
   if (!message?.id || !message.from || !rememberMessage(message.id)) return;
   const sender = message.from;
@@ -61,7 +57,6 @@ async function handleMessage(message) {
     return;
   }
   await markAsRead(message.id).catch(() => {});
-
   if (message.type === 'image') {
     if (!config.openaiApiKey) {
       await sendText(sender, 'I received your image. Image understanding is available when the bot owner configures the AI service.');
@@ -77,13 +72,11 @@ async function handleMessage(message) {
     }
     return;
   }
-
   const text = extractText(message);
   if (!text) {
     await sendText(sender, 'I can currently understand text and images. Send !help to see what I can do.');
     return;
   }
-
   if (text.startsWith('!') || text.startsWith('.')) {
     const result = await runCommand(text);
     if (result.handled) {
@@ -91,9 +84,8 @@ async function handleMessage(message) {
       return;
     }
   }
-
   if (!config.openaiApiKey) {
-    await sendText(sender, 'Thanks for your message! The AI assistant is not configured yet. Send !help to see available commands.');
+    await sendText(sender, 'The AI assistant is not configured yet. The bot owner can finish setup in the dashboard.');
     return;
   }
   try {
@@ -104,17 +96,28 @@ async function handleMessage(message) {
   }
 }
 
-app.get('/health', (req, res) => {
-  res.json({ ok: true, service: 'nipuna-whatsapp-ai-bot', aiConfigured: Boolean(config.openaiApiKey) });
-});
-app.get('/webhook', (req, res) => {
+function statusPayload() {
+  return {
+    service: 'Nipuna WhatsApp AI',
+    runtime: 'online',
+    whatsappConfigured: Boolean(config.whatsappToken && config.phoneNumberId && config.verifyToken && config.appSecret),
+    aiConfigured: Boolean(config.openaiApiKey),
+    webSearchConfigured: Boolean(config.tavilyApiKey),
+    databaseConfigured: Boolean(config.supabaseUrl && config.supabaseServiceRoleKey),
+    dashboardPasswordConfigured: Boolean(config.dashboardPassword),
+    webhookPath: '/api/webhook'
+  };
+}
+app.get(['/health', '/api/health'], (req, res) => res.json({ ok: true, ...statusPayload() }));
+app.get('/api/status', (req, res) => res.json(statusPayload()));
+app.get(['/webhook', '/api/webhook'], (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
   if (mode === 'subscribe' && token && token === config.verifyToken) return res.status(200).send(challenge);
   return res.sendStatus(403);
 });
-app.post('/webhook', (req, res) => {
+app.post(['/webhook', '/api/webhook'], (req, res) => {
   if (!verifySignature(req)) return res.sendStatus(401);
   if (req.body?.object !== 'whatsapp_business_account') return res.sendStatus(404);
   res.sendStatus(200);
@@ -126,17 +129,20 @@ app.post('/webhook', (req, res) => {
     }
   }
 });
-app.get('/', (req, res) => res.type('text').send('Nipuna WhatsApp AI Bot is running. Configure Meta webhook at /webhook.'));
+app.get('/', (req, res) => res.type('text').send('Nipuna WhatsApp AI Bot is running. Open the dashboard at /dashboard.'));
+app.get('/dashboard', (req, res) => res.redirect('/'));
 
-const server = app.listen(config.port, () => {
-  console.log('WhatsApp bot listening on port ' + config.port);
-  console.log('Health check: /health | Webhook: /webhook');
-  if (!config.appSecret && config.nodeEnv === 'production') console.warn('META_APP_SECRET is missing; signed webhook verification is disabled.');
-});
-function shutdown(signal) {
-  console.log(signal + ' received; shutting down.');
-  server.close(() => process.exit(0));
-  setTimeout(() => process.exit(1), 10000).unref();
+if (require.main === module) {
+  const server = app.listen(config.port, () => {
+    console.log('WhatsApp bot listening on port ' + config.port);
+    console.log('Health check: /health | Webhook: /webhook');
+  });
+  function shutdown(signal) {
+    console.log(signal + ' received; shutting down.');
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(1), 10000).unref();
+  }
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 }
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
+module.exports = app;
