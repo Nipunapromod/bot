@@ -20,6 +20,7 @@ function publish(event, data) {
 }
 bot = new WhatsAppWebBot({
   sessionDir: config.sessionDir,
+  maxMessagesPerMinute: config.maxMessagesPerMinute,
   onMessage: async ({ jid, text }) => {
     try { await bot.sendText(jid, await getAIReply(jid, text)); }
     catch (error) {
