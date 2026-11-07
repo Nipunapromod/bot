@@ -61,11 +61,11 @@ async function loadStatus(){
   if(r.status===401){$('loginWrap').classList.remove('hidden');$('statusMessage').textContent='Sign in to view status.';return}
   const d=await r.json();if(!r.ok)throw new Error(d.error||'Status request failed');
   $('loginWrap').classList.add('hidden');$('logout').classList.remove('hidden');
-  $('waValue').textContent=d.whatsappConfigured?'Connected':'Setup needed';
+  $('waValue').textContent=d.whatsappConfigured?'Configured':'Setup needed';
   $('aiValue').textContent=d.aiConfigured?'Ready':'Not configured';
   $('searchValue').textContent=d.webSearchConfigured?'Enabled':'Not configured';
   $('dbValue').textContent=d.databaseConfigured?'Connected':'Not configured';
-  $('waHint').textContent=d.whatsappConfigured?'Required Meta credentials found':'Add Meta token, phone ID, verify token and app secret';
+  $('waHint').textContent=d.whatsappConfigured?'Meta credentials are present':'Add Meta token, phone ID, verify token and app secret';
   state('waState',d.whatsappConfigured,d.whatsappConfigured?'Configured':'Missing');
   state('sigState',d.whatsappConfigured,d.whatsappConfigured?'App secret set':'App secret missing');
   state('aiState',d.aiConfigured,d.aiConfigured?'Ready':'Missing key');
