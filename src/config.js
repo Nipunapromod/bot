@@ -18,5 +18,6 @@ module.exports = {
   supabaseUrl: process.env.SUPABASE_URL || '',
   supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY || '',
   dashboardPassword: process.env.DASHBOARD_PASSWORD || '',
+  dashboardSessionSecret: process.env.DASHBOARD_SESSION_SECRET || '',
   userMessagesPerMinute: Math.max(1, Number(process.env.USER_MESSAGES_PER_MINUTE || 12))
 };
