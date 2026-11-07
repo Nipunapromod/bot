@@ -10,8 +10,8 @@ function extractMessageText(message) {
   return c.conversation || c.extendedTextMessage?.text || c.imageMessage?.caption || c.videoMessage?.caption || '';
 }
 class WhatsAppWebBot extends EventEmitter {
-  constructor({ sessionDir, onMessage }) {
-    super(); this.sessionDir = sessionDir; this.onMessage = onMessage;
+  constructor({ sessionDir, onMessage, maxMessagesPerMinute = 10 }) {
+    super(); this.sessionDir = sessionDir; this.onMessage = onMessage; this.maxMessagesPerMinute = maxMessagesPerMinute;
     this.socket = null; this.starting = false; this.reconnectTimer = null; this.manualDisconnect = false; this.qrDataUrl = null;
     this.status = { state: 'disconnected', message: 'Not connected', phone: null };
     this.messageTimes = new Map();
@@ -82,7 +82,7 @@ class WhatsAppWebBot extends EventEmitter {
     const text = extractMessageText(message).trim();
     if (!text) return;
     const recent = (this.messageTimes.get(jid) || []).filter(t => Date.now() - t < 60000);
-    if (recent.length >= 10) return;
+    if (recent.length >= this.maxMessagesPerMinute) return;
     recent.push(Date.now()); this.messageTimes.set(jid, recent);
     this.emit('message', { from: jid.split('@')[0], preview: text.slice(0, 80), at: new Date().toISOString() });
     if (this.onMessage) await this.onMessage({ jid, text });
