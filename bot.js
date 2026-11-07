@@ -1,69 +1,142 @@
-const venom = require('venom-bot');
 const express = require('express');
-const axios = require('axios');
+const crypto = require('node:crypto');
+const config = require('./src/config');
+const { sendText, markAsRead, downloadMedia } = require('./src/whatsapp');
+const { getAIReply } = require('./src/ai');
+const { runCommand } = require('./src/commands');
+
 const app = express();
+const seenMessages = new Map();
+const userWindows = new Map();
+app.disable('x-powered-by');
+app.use(express.json({
+  limit: '2mb',
+  verify: (req, res, buffer) => { req.rawBody = Buffer.from(buffer); }
+}));
 
-let qrCodeBase64 = '';
-
-venom
-  .create({
-    session: 'session-bot',
-    catchQR: (base64Qrimg) => {
-      qrCodeBase64 = base64Qrimg;
-      console.log('QR updated, scan at /qr');
-    },
-    browserArgs: ['--no-sandbox']
-  })
-  .then((client) => start(client))
-  .catch((err) => console.error(err));
-
-function start(client) {
-  client.onMessage(async (message) => {
-    const body = message.body.trim();
-    if (!body.startsWith('.')) return;
-
-    const [prefix, ...args] = body.slice(1).split(' ');
-    const text = args.join(' ');
-
-    if (prefix === 'photo') {
-      if (!text) return client.sendText(message.from, 'Send like `.photo cat`');
-
-      try {
-        const res = await axios.get('https://api.unsplash.com/search/photos', {
-          params: { query: text, per_page: 20 },
-          headers: {
-            Authorization: `Client-ID ${process.env.UNSPLASH_ACCESS_KEY}`
-          }
-        });
-
-        const images = res.data.results.map(img => img.urls.small);
-        for (let url of images) {
-          await client.sendImage(message.from, url, 'photo.jpg', `Here's a photo of ${text}`);
-        }
-      } catch (err) {
-        console.log(err.message);
-        client.sendText(message.from, 'Error fetching images.');
-      }
-    }
-
-    // Add more commands like this:
-    if (prefix === 'hello') {
-      client.sendText(message.from, 'Hey there bro!');
-    }
-
-  });
+function verifySignature(req) {
+  if (!config.appSecret) return config.allowUnsignedWebhook && config.nodeEnv !== 'production';
+  const signature = req.get('x-hub-signature-256') || '';
+  if (!signature.startsWith('sha256=')) return false;
+  const expected = crypto.createHmac('sha256', config.appSecret).update(req.rawBody || Buffer.alloc(0)).digest();
+  const received = Buffer.from(signature.slice(7), 'hex');
+  return received.length === expected.length && crypto.timingSafeEqual(received, expected);
 }
 
-// Show QR code on /qr
-app.get('/qr', (req, res) => {
-  if (!qrCodeBase64) return res.send('QR code not ready. Wait a few seconds...');
-  res.send(`
-    <html><body style="text-align:center;">
-    <h2>Scan WhatsApp QR Code</h2>
-    <img src="${qrCodeBase64}" />
-    </body></html>
-  `);
-});
+function allowedByRateLimit(sender) {
+  const now = Date.now();
+  const recent = (userWindows.get(sender) || []).filter(time => now - time < 60_000);
+  if (recent.length >= config.userMessagesPerMinute) {
+    userWindows.set(sender, recent);
+    return false;
+  }
+  recent.push(now);
+  userWindows.set(sender, recent);
+  return true;
+}
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log('QR page at /qr'));
+function rememberMessage(id) {
+  if (seenMessages.has(id)) return false;
+  seenMessages.set(id, Date.now());
+  if (seenMessages.size > 5000) {
+    const cutoff = Date.now() - 6 * 60 * 60 * 1000;
+    for (const [key, time] of seenMessages) if (time < cutoff) seenMessages.delete(key);
+    while (seenMessages.size > 4000) seenMessages.delete(seenMessages.keys().next().value);
+  }
+  return true;
+}
+
+function extractText(message) {
+  if (message.type === 'text') return message.text?.body?.trim() || '';
+  if (message.type === 'button') return message.button?.text?.trim() || '';
+  if (message.type === 'interactive') return message.interactive?.button_reply?.title || message.interactive?.list_reply?.title || '';
+  return '';
+}
+
+async function handleMessage(message) {
+  if (!message?.id || !message.from || !rememberMessage(message.id)) return;
+  const sender = message.from;
+  if (!allowedByRateLimit(sender)) {
+    await sendText(sender, 'You are sending messages too quickly. Please wait a moment and try again.');
+    return;
+  }
+  await markAsRead(message.id).catch(() => {});
+
+  if (message.type === 'image') {
+    if (!config.openaiApiKey) {
+      await sendText(sender, 'I received your image. Image understanding is available when the bot owner configures the AI service.');
+      return;
+    }
+    try {
+      const media = await downloadMedia(message.image?.id);
+      const answer = await getAIReply(sender, 'Please describe or analyse this image. Reply in the language most suitable for the user.', media);
+      await sendText(sender, answer);
+    } catch (error) {
+      console.error('Image handling failed:', error.message);
+      await sendText(sender, 'I could not read that image. Please try a smaller image or send it again.');
+    }
+    return;
+  }
+
+  const text = extractText(message);
+  if (!text) {
+    await sendText(sender, 'I can currently understand text and images. Send !help to see what I can do.');
+    return;
+  }
+
+  if (text.startsWith('!') || text.startsWith('.')) {
+    const result = await runCommand(text);
+    if (result.handled) {
+      await sendText(sender, result.reply);
+      return;
+    }
+  }
+
+  if (!config.openaiApiKey) {
+    await sendText(sender, 'Thanks for your message! The AI assistant is not configured yet. Send !help to see available commands.');
+    return;
+  }
+  try {
+    await sendText(sender, await getAIReply(sender, text));
+  } catch (error) {
+    console.error('AI reply failed:', error.message);
+    await sendText(sender, 'I hit a temporary AI service problem. Please try again shortly.');
+  }
+}
+
+app.get('/health', (req, res) => {
+  res.json({ ok: true, service: 'nipuna-whatsapp-ai-bot', aiConfigured: Boolean(config.openaiApiKey) });
+});
+app.get('/webhook', (req, res) => {
+  const mode = req.query['hub.mode'];
+  const token = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
+  if (mode === 'subscribe' && token && token === config.verifyToken) return res.status(200).send(challenge);
+  return res.sendStatus(403);
+});
+app.post('/webhook', (req, res) => {
+  if (!verifySignature(req)) return res.sendStatus(401);
+  if (req.body?.object !== 'whatsapp_business_account') return res.sendStatus(404);
+  res.sendStatus(200);
+  for (const entry of req.body.entry || []) {
+    for (const change of entry.changes || []) {
+      for (const message of change.value?.messages || []) {
+        handleMessage(message).catch(error => console.error('Message handler failed:', error.message));
+      }
+    }
+  }
+});
+app.get('/', (req, res) => res.type('text').send('Nipuna WhatsApp AI Bot is running. Configure Meta webhook at /webhook.'));
+
+const server = app.listen(config.port, () => {
+  console.log('WhatsApp bot listening on port ' + config.port);
+  console.log('Health check: /health | Webhook: /webhook');
+  if (!config.appSecret && config.nodeEnv === 'production') console.warn('META_APP_SECRET is missing; signed webhook verification is disabled.');
+});
+function shutdown(signal) {
+  console.log(signal + ' received; shutting down.');
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(1), 10000).unref();
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
