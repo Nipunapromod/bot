@@ -1,3 +1,4 @@
+process.umask(0o077);
 const express = require('express');
 const path = require('node:path');
 const config = require('./src/config');
@@ -7,6 +8,7 @@ const { createSessionToken, isValidSession, safeEqual } = require('./src/dashboa
 
 const app = express();
 const clients = new Set();
+const loginAttempts = new Map();
 let bot;
 app.disable('x-powered-by');
 app.use(express.json({ limit: '32kb' }));
@@ -37,8 +39,16 @@ function requireDashboard(req, res, next) {
 app.get('/health', (req, res) => res.json({ ok: true, service: 'nipuna-whatsapp-ai-bot', state: bot.status.state }));
 app.post('/api/login', (req, res) => {
   if (!config.dashboardPassword || !config.sessionSecret) return res.status(503).json({ error: 'Set dashboard credentials on the server first.' });
+  const ip = req.ip || req.socket.remoteAddress || 'unknown';
+  const now = Date.now();
+  const attempts = (loginAttempts.get(ip) || []).filter(time => now - time < 15 * 60 * 1000);
+  if (attempts.length >= 5) return res.status(429).json({ error: 'Too many attempts. Try again in 15 minutes.' });
   const password = typeof req.body?.password === 'string' ? req.body.password : '';
-  if (!safeEqual(password, config.dashboardPassword)) return res.status(401).json({ error: 'Incorrect dashboard password.' });
+  if (!safeEqual(password, config.dashboardPassword)) {
+    attempts.push(now); loginAttempts.set(ip, attempts);
+    return res.status(401).json({ error: 'Incorrect dashboard password.' });
+  }
+  loginAttempts.delete(ip);
   res.cookie('np_dashboard', createSessionToken(config.sessionSecret), {
     httpOnly: true, secure: config.nodeEnv === 'production', sameSite: 'strict', path: '/', maxAge: 12 * 60 * 60 * 1000
   });
@@ -59,6 +69,7 @@ app.get('/api/events', requireDashboard, (req, res) => {
   res.write('event: status\ndata: ' + JSON.stringify({
     ...bot.status, aiConfigured: Boolean(config.openaiApiKey), webSearchConfigured: Boolean(config.tavilyApiKey)
   }) + '\n\n');
+  if (bot.qrDataUrl) res.write('event: qr\\ndata: ' + JSON.stringify({ dataUrl: bot.qrDataUrl }) + '\\n\\n');
   req.on('close', () => clients.delete(res));
 });
 app.post('/api/connect', requireDashboard, async (req, res) => {
