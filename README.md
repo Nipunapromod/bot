@@ -1,68 +1,67 @@
 # Nipuna WhatsApp AI Bot
 
-A modular WhatsApp chatbot built with Node.js, Express, the official Meta WhatsApp Cloud API, and optional OpenAI-compatible AI. It uses a webhook instead of automating WhatsApp Web.
+A WhatsApp Web companion bot with a password-protected browser dashboard, QR pairing, natural-language AI replies, and optional web search.
+
+## Important
+
+This project uses an unofficial WhatsApp Web integration through Baileys. It is not the official WhatsApp Business Cloud API and is not affiliated with WhatsApp. Use only with an account you own or are authorized to manage. Automated or bulk messaging can violate platform rules and may lead to account restrictions. Do not use this project for spam.
 
 ## Features
 
-- Official WhatsApp Cloud API integration
-- Webhook verification and request-signature validation
-- AI text conversations using an OpenAI-compatible Chat Completions API
-- Image understanding when a vision-capable model is configured
-- Sinhala and English responses
-- Commands: !help, !ping, !about, !time, !echo
-- Duplicate-message protection and per-user rate limiting
-- Health endpoint and graceful shutdown
-- Secrets supplied through environment variables
+- Browser dashboard with password login
+- QR code pairing and live connection status
+- Local WhatsApp session persistence
+- Natural-language replies in Sinhala and English
+- Optional AI web search using Tavily
+- Direct-message handling only; group messages are ignored
+- Basic rate limiting and health endpoint
 
 ## Requirements
 
 - Node.js 20+
-- A Meta developer app with WhatsApp product configured
-- A WhatsApp Business phone number ID and access token
-- A public HTTPS deployment URL for the webhook
-- Optional: an OpenAI API key or compatible provider
+- A persistent Node.js host with a persistent disk or volume
+- An OpenAI-compatible API key for AI replies
+- Optional Tavily API key for web search
 
-## Run locally
+## Local setup
 
 1. Copy .env.example to .env and fill in the values.
 2. Install dependencies with npm install.
 3. Start with npm start.
-4. Expose the local server through a trusted HTTPS tunnel for Meta webhook testing.
-5. Set the Meta webhook callback URL to https://YOUR_DOMAIN/webhook and use the same WHATSAPP_VERIFY_TOKEN value.
-6. Subscribe the WhatsApp Business Account webhook to the messages field.
+4. Open http://localhost:3000.
+5. Sign in with your dashboard password and press Connect WhatsApp.
+6. On your phone, open WhatsApp > Linked devices > Link a device, then scan the QR code.
 
 ## Environment variables
 
 | Variable | Required | Description |
 | --- | --- | --- |
-| WHATSAPP_TOKEN | Yes | Meta WhatsApp Cloud API access token |
-| WHATSAPP_PHONE_NUMBER_ID | Yes | WhatsApp phone number ID from Meta |
-| WHATSAPP_VERIFY_TOKEN | Yes | Private string chosen by you for webhook verification |
-| META_APP_SECRET | Production | Meta app secret used to validate webhook signatures |
-| OPENAI_API_KEY | Optional | Enables AI chat and image understanding |
-| OPENAI_MODEL | Optional | Defaults to gpt-4o-mini; choose a vision-capable model for images |
-| OPENAI_BASE_URL | Optional | Defaults to https://api.openai.com/v1 |
-| WHATSAPP_GRAPH_VERSION | Optional | Graph API version; defaults to v23.0 |
+| DASHBOARD_PASSWORD | Yes | Strong password for dashboard access |
+| DASHBOARD_SESSION_SECRET | Yes | Random secret used to sign dashboard sessions |
+| OPENAI_API_KEY | For AI | API key for the AI provider |
+| OPENAI_MODEL | Optional | Defaults to gpt-4o-mini |
+| OPENAI_BASE_URL | Optional | Defaults to OpenAI API |
+| TAVILY_API_KEY | Optional | Enables web search |
+| WHATSAPP_SESSION_DIR | Recommended | Persistent folder for WhatsApp authentication |
 | PORT | Optional | Defaults to 3000 |
-| USER_MESSAGES_PER_MINUTE | Optional | Defaults to 12 |
+| MAX_MESSAGES_PER_MINUTE | Optional | Defaults to 10 |
 
-Never commit real tokens, API keys, app secrets, or customer data. Rotate any credential that has been exposed.
+Never commit .env, dashboard passwords, API keys, or WhatsApp session files. Anyone with access to the session directory may be able to control the linked WhatsApp account.
+
+## Deployment
+
+The dashboard and WhatsApp worker run in the same Node.js process in this version. Deploy to a host that keeps the process running and provides persistent disk storage. If the process stops or local files are discarded, the bot disconnects or loses its session. Vercel can host a separate static dashboard later, but the WhatsApp worker still needs a persistent host.
 
 ## Endpoints
 
-- GET / - service status
-- GET /health - JSON health check
-- GET /webhook - Meta webhook verification
-- POST /webhook - incoming WhatsApp webhook events
+- / - dashboard
+- /health - service health
+- /api/login - dashboard login
+- /api/status - connection status (authenticated)
+- /api/events - live dashboard updates (authenticated)
+- /api/connect - start QR pairing (authenticated)
+- /api/disconnect - log out and remove the linked session (authenticated)
 
-## Deploy
+## Privacy
 
-Set environment variables in your hosting provider and deploy the repository. The included Procfile starts the service with node bot.js. Configure the deployed HTTPS URL in the Meta developer dashboard.
-
-## Notes
-
-- This project does not scan a QR code or automate a personal WhatsApp Web session. It uses Meta's official business messaging API.
-- Meta messaging rules, templates, opt-in requirements, conversation windows, and applicable charges still apply.
-- Rate-limit and duplicate caches are in-memory. Use Redis or a database for multi-instance production deployments.
-- Image processing temporarily downloads incoming images in memory and sends them to the configured AI provider. Enable this only if your privacy notice and provider settings permit it.
-- Documents, audio, video, interactive flows, and persistent chat history are not implemented yet.
+Incoming messages are processed by the configured AI provider. If web search is enabled, search queries are sent to Tavily. WhatsApp session credentials are stored on the host's persistent disk. Do not connect an account or send private content unless you understand these data flows.
