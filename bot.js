@@ -70,7 +70,7 @@ app.get('/api/events', requireDashboard, (req, res) => {
   res.write('event: status\ndata: ' + JSON.stringify({
     ...bot.status, aiConfigured: Boolean(config.openaiApiKey), webSearchConfigured: Boolean(config.tavilyApiKey)
   }) + '\n\n');
-  if (bot.qrDataUrl) res.write('event: qr\\ndata: ' + JSON.stringify({ dataUrl: bot.qrDataUrl }) + '\\n\\n');
+  if (bot.qrDataUrl) res.write('event: qr\ndata: ' + JSON.stringify({ dataUrl: bot.qrDataUrl }) + '\n\n');
   req.on('close', () => clients.delete(res));
 });
 app.post('/api/connect', requireDashboard, async (req, res) => {
