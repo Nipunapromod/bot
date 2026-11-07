@@ -1,140 +1,85 @@
 const express = require('express');
-const crypto = require('node:crypto');
+const path = require('node:path');
 const config = require('./src/config');
-const { sendText, markAsRead, downloadMedia } = require('./src/whatsapp');
+const { WhatsAppWebBot } = require('./src/whatsapp-web');
 const { getAIReply } = require('./src/ai');
-const { runCommand } = require('./src/commands');
+const { createSessionToken, isValidSession, safeEqual } = require('./src/dashboard-auth');
 
 const app = express();
-const seenMessages = new Map();
-const userWindows = new Map();
+const clients = new Set();
+let bot;
 app.disable('x-powered-by');
-app.use(express.json({
-  limit: '2mb',
-  verify: (req, res, buffer) => { req.rawBody = Buffer.from(buffer); }
+app.use(express.json({ limit: '32kb' }));
+app.use(express.static(path.join(__dirname, 'public'), { index: false }));
+
+function publish(event, data) {
+  const message = 'event: ' + event + '\ndata: ' + JSON.stringify(data) + '\n\n';
+  for (const client of clients) client.write(message);
+}
+bot = new WhatsAppWebBot({
+  sessionDir: config.sessionDir,
+  onMessage: async ({ jid, text }) => {
+    try { await bot.sendText(jid, await getAIReply(jid, text)); }
+    catch (error) {
+      console.error('AI reply failed:', error.message);
+      await bot.sendText(jid, 'I hit a temporary AI service problem. Please try again later.').catch(() => {});
+    }
+  }
+});
+bot.on('status', status => publish('status', status));
+bot.on('qr', dataUrl => publish('qr', { dataUrl }));
+bot.on('message', info => publish('activity', info));
+
+function requireDashboard(req, res, next) {
+  if (!isValidSession(req.headers.cookie || '', config.sessionSecret)) return res.status(401).json({ error: 'Please sign in again.' });
+  next();
+}
+app.get('/health', (req, res) => res.json({ ok: true, service: 'nipuna-whatsapp-ai-bot', state: bot.status.state }));
+app.post('/api/login', (req, res) => {
+  if (!config.dashboardPassword || !config.sessionSecret) return res.status(503).json({ error: 'Set dashboard credentials on the server first.' });
+  const password = typeof req.body?.password === 'string' ? req.body.password : '';
+  if (!safeEqual(password, config.dashboardPassword)) return res.status(401).json({ error: 'Incorrect dashboard password.' });
+  res.cookie('np_dashboard', createSessionToken(config.sessionSecret), {
+    httpOnly: true, secure: config.nodeEnv === 'production', sameSite: 'strict', path: '/', maxAge: 12 * 60 * 60 * 1000
+  });
+  res.json({ ok: true });
+});
+app.post('/api/logout', requireDashboard, (req, res) => {
+  res.clearCookie('np_dashboard', { httpOnly: true, secure: config.nodeEnv === 'production', sameSite: 'strict', path: '/' });
+  res.json({ ok: true });
+});
+app.get('/api/me', requireDashboard, (req, res) => res.json({ authenticated: true }));
+app.get('/api/status', requireDashboard, (req, res) => res.json({
+  ...bot.status, aiConfigured: Boolean(config.openaiApiKey), webSearchConfigured: Boolean(config.tavilyApiKey)
 }));
-
-function verifySignature(req) {
-  if (!config.appSecret) return config.allowUnsignedWebhook && config.nodeEnv !== 'production';
-  const signature = req.get('x-hub-signature-256') || '';
-  if (!signature.startsWith('sha256=')) return false;
-  const expected = crypto.createHmac('sha256', config.appSecret).update(req.rawBody || Buffer.alloc(0)).digest();
-  const received = Buffer.from(signature.slice(7), 'hex');
-  return received.length === expected.length && crypto.timingSafeEqual(received, expected);
-}
-
-function allowedByRateLimit(sender) {
-  const now = Date.now();
-  const recent = (userWindows.get(sender) || []).filter(time => now - time < 60_000);
-  if (recent.length >= config.userMessagesPerMinute) {
-    userWindows.set(sender, recent);
-    return false;
-  }
-  recent.push(now);
-  userWindows.set(sender, recent);
-  return true;
-}
-
-function rememberMessage(id) {
-  if (seenMessages.has(id)) return false;
-  seenMessages.set(id, Date.now());
-  if (seenMessages.size > 5000) {
-    const cutoff = Date.now() - 6 * 60 * 60 * 1000;
-    for (const [key, time] of seenMessages) if (time < cutoff) seenMessages.delete(key);
-    while (seenMessages.size > 4000) seenMessages.delete(seenMessages.keys().next().value);
-  }
-  return true;
-}
-
-function extractText(message) {
-  if (message.type === 'text') return message.text?.body?.trim() || '';
-  if (message.type === 'button') return message.button?.text?.trim() || '';
-  if (message.type === 'interactive') return message.interactive?.button_reply?.title || message.interactive?.list_reply?.title || '';
-  return '';
-}
-
-async function handleMessage(message) {
-  if (!message?.id || !message.from || !rememberMessage(message.id)) return;
-  const sender = message.from;
-  if (!allowedByRateLimit(sender)) {
-    await sendText(sender, 'You are sending messages too quickly. Please wait a moment and try again.');
-    return;
-  }
-  await markAsRead(message.id).catch(() => {});
-
-  if (message.type === 'image') {
-    if (!config.openaiApiKey) {
-      await sendText(sender, 'I received your image. Image understanding is available when the bot owner configures the AI service.');
-      return;
-    }
-    try {
-      const media = await downloadMedia(message.image?.id);
-      const answer = await getAIReply(sender, 'Please describe or analyse this image. Reply in the language most suitable for the user.', media);
-      await sendText(sender, answer);
-    } catch (error) {
-      console.error('Image handling failed:', error.message);
-      await sendText(sender, 'I could not read that image. Please try a smaller image or send it again.');
-    }
-    return;
-  }
-
-  const text = extractText(message);
-  if (!text) {
-    await sendText(sender, 'I can currently understand text and images. Send !help to see what I can do.');
-    return;
-  }
-
-  if (text.startsWith('!') || text.startsWith('.')) {
-    const result = await runCommand(text);
-    if (result.handled) {
-      await sendText(sender, result.reply);
-      return;
-    }
-  }
-
-  if (!config.openaiApiKey) {
-    await sendText(sender, 'Thanks for your message! The AI assistant is not configured yet. Send !help to see available commands.');
-    return;
-  }
-  try {
-    await sendText(sender, await getAIReply(sender, text));
-  } catch (error) {
-    console.error('AI reply failed:', error.message);
-    await sendText(sender, 'I hit a temporary AI service problem. Please try again shortly.');
-  }
-}
-
-app.get('/health', (req, res) => {
-  res.json({ ok: true, service: 'nipuna-whatsapp-ai-bot', aiConfigured: Boolean(config.openaiApiKey) });
+app.get('/api/events', requireDashboard, (req, res) => {
+  res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
+  res.flushHeaders?.();
+  clients.add(res);
+  res.write('event: status\ndata: ' + JSON.stringify({
+    ...bot.status, aiConfigured: Boolean(config.openaiApiKey), webSearchConfigured: Boolean(config.tavilyApiKey)
+  }) + '\n\n');
+  req.on('close', () => clients.delete(res));
 });
-app.get('/webhook', (req, res) => {
-  const mode = req.query['hub.mode'];
-  const token = req.query['hub.verify_token'];
-  const challenge = req.query['hub.challenge'];
-  if (mode === 'subscribe' && token && token === config.verifyToken) return res.status(200).send(challenge);
-  return res.sendStatus(403);
+app.post('/api/connect', requireDashboard, async (req, res) => {
+  try { await bot.connect(); res.json({ ok: true }); }
+  catch (error) { res.status(500).json({ error: error.message }); }
 });
-app.post('/webhook', (req, res) => {
-  if (!verifySignature(req)) return res.sendStatus(401);
-  if (req.body?.object !== 'whatsapp_business_account') return res.sendStatus(404);
-  res.sendStatus(200);
-  for (const entry of req.body.entry || []) {
-    for (const change of entry.changes || []) {
-      for (const message of change.value?.messages || []) {
-        handleMessage(message).catch(error => console.error('Message handler failed:', error.message));
-      }
-    }
-  }
+app.post('/api/disconnect', requireDashboard, async (req, res) => {
+  try { await bot.disconnect(); res.json({ ok: true }); }
+  catch (error) { res.status(500).json({ error: error.message }); }
 });
-app.get('/', (req, res) => res.type('text').send('Nipuna WhatsApp AI Bot is running. Configure Meta webhook at /webhook.'));
+app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
 const server = app.listen(config.port, () => {
-  console.log('WhatsApp bot listening on port ' + config.port);
-  console.log('Health check: /health | Webhook: /webhook');
-  if (!config.appSecret && config.nodeEnv === 'production') console.warn('META_APP_SECRET is missing; signed webhook verification is disabled.');
+  console.log('Nipuna WhatsApp dashboard listening on port ' + config.port);
+  if (!config.dashboardPassword || !config.sessionSecret) console.warn('Set DASHBOARD_PASSWORD and DASHBOARD_SESSION_SECRET before login.');
+  if (!config.openaiApiKey) console.warn('AI is disabled: OPENAI_API_KEY is missing.');
+  if (!config.tavilyApiKey) console.warn('Web search is disabled: TAVILY_API_KEY is missing.');
 });
-function shutdown(signal) {
+async function shutdown(signal) {
   console.log(signal + ' received; shutting down.');
+  await bot.stop().catch(() => {});
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(1), 10000).unref();
 }
