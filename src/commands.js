@@ -1,7 +1,8 @@
 const helpText = '🤖 *Nipuna WhatsApp Bot*\n\nCommands:\n!help - Show this menu\n!ping - Check if the bot is online\n!about - About this bot\n!time - Current server time\n!echo <message> - Repeat your message\n\nYou can also send a normal message to chat with the AI assistant.\nSend an image for image understanding when AI is enabled.';
 async function runCommand(input) {
-  const cleaned = input.trim().replace(/^\./, '!').toLowerCase();
-  const [command, ...parts] = cleaned.split(/\s+/);
+  const cleaned = input.trim().replace(/^\./, '!');
+  const [rawCommand, ...parts] = cleaned.split(/\s+/);
+  const command = rawCommand.toLowerCase();
   const argument = parts.join(' ');
   switch (command) {
     case '!help':
