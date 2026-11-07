@@ -1,68 +1,55 @@
-# Nipuna WhatsApp AI Bot
+# Nipuna WhatsApp AI
 
-A modular WhatsApp chatbot built with Node.js, Express, the official Meta WhatsApp Cloud API, and optional OpenAI-compatible AI. It uses a webhook instead of automating WhatsApp Web.
+A WhatsApp AI assistant and private admin dashboard built with Node.js, Express, and the official Meta WhatsApp Business Cloud API.
 
-## Features
+## Included
 
-- Official WhatsApp Cloud API integration
-- Webhook verification and request-signature validation
-- AI text conversations using an OpenAI-compatible Chat Completions API
-- Image understanding when a vision-capable model is configured
-- Sinhala and English responses
-- Commands: !help, !ping, !about, !time, !echo
-- Duplicate-message protection and per-user rate limiting
-- Health endpoint and graceful shutdown
-- Secrets supplied through environment variables
+- Official Meta WhatsApp Cloud API webhook and outbound messaging
+- Private dashboard with signed, HTTP-only admin sessions
+- Natural-language Sinhala and English AI conversations
+- Optional Tavily web search for latest/current/news/lookup questions
+- Image understanding through a vision-capable OpenAI-compatible model
+- Duplicate-message protection, per-sender rate limits and health endpoint
+- Vercel serverless entry point and Git-based deployment support
 
-## Requirements
+## Deploy to Vercel
+
+1. Import this GitHub repository into Vercel.
+2. Add the environment variables listed in `.env.example` under Project Settings → Environment Variables.
+3. Set `DASHBOARD_PASSWORD` and a long random `DASHBOARD_SESSION_SECRET` before opening the dashboard.
+4. Deploy the project. The dashboard is served at the project root.
+5. Set the Meta webhook callback URL to `https://YOUR-VERCEL-DOMAIN/api/webhook`.
+6. Use the same `WHATSAPP_VERIFY_TOKEN` value in Meta webhook verification and subscribe the WhatsApp Business Account to the `messages` field.
+
+## Required Meta variables
+
+- `WHATSAPP_TOKEN`: Meta Cloud API access token
+- `WHATSAPP_PHONE_NUMBER_ID`: WhatsApp phone number ID
+- `WHATSAPP_VERIFY_TOKEN`: private webhook verification string
+- `META_APP_SECRET`: Meta app secret used to validate webhook signatures
+
+## AI and search
+
+- `OPENAI_API_KEY` enables natural-language AI and image understanding.
+- `OPENAI_MODEL` defaults to `gpt-4o-mini`; select a vision-capable model for image messages.
+- `TAVILY_API_KEY` enables live web search when a message asks for current, latest, news or lookup information.
+
+The app does not invent search citations; it passes returned source URLs to the AI model for inclusion in its answer.
+
+## Dashboard security
+
+The dashboard uses `DASHBOARD_PASSWORD` and `DASHBOARD_SESSION_SECRET`. The login cookie is HTTP-only, Secure, SameSite=Strict and expires after 12 hours. Keep all keys in Vercel server-side environment variables. Never add them to frontend code or commit them to GitHub.
+
+## Supabase
+
+Supabase credentials are reserved for persistent conversation history and dashboard analytics. Connect a dedicated Supabase project before enabling those features. Do not reuse a database that contains unrelated personal or application data.
+
+## Local development
 
 - Node.js 20+
-- A Meta developer app with WhatsApp product configured
-- A WhatsApp Business phone number ID and access token
-- A public HTTPS deployment URL for the webhook
-- Optional: an OpenAI API key or compatible provider
+- Copy `.env.example` to `.env`, fill in values, then run `npm install` and `npm start`.
+- Local webhook path: `/webhook`; deployed path: `/api/webhook`.
 
-## Run locally
+## Important
 
-1. Copy .env.example to .env and fill in the values.
-2. Install dependencies with npm install.
-3. Start with npm start.
-4. Expose the local server through a trusted HTTPS tunnel for Meta webhook testing.
-5. Set the Meta webhook callback URL to https://YOUR_DOMAIN/webhook and use the same WHATSAPP_VERIFY_TOKEN value.
-6. Subscribe the WhatsApp Business Account webhook to the messages field.
-
-## Environment variables
-
-| Variable | Required | Description |
-| --- | --- | --- |
-| WHATSAPP_TOKEN | Yes | Meta WhatsApp Cloud API access token |
-| WHATSAPP_PHONE_NUMBER_ID | Yes | WhatsApp phone number ID from Meta |
-| WHATSAPP_VERIFY_TOKEN | Yes | Private string chosen by you for webhook verification |
-| META_APP_SECRET | Production | Meta app secret used to validate webhook signatures |
-| OPENAI_API_KEY | Optional | Enables AI chat and image understanding |
-| OPENAI_MODEL | Optional | Defaults to gpt-4o-mini; choose a vision-capable model for images |
-| OPENAI_BASE_URL | Optional | Defaults to https://api.openai.com/v1 |
-| WHATSAPP_GRAPH_VERSION | Optional | Graph API version; defaults to v23.0 |
-| PORT | Optional | Defaults to 3000 |
-| USER_MESSAGES_PER_MINUTE | Optional | Defaults to 12 |
-
-Never commit real tokens, API keys, app secrets, or customer data. Rotate any credential that has been exposed.
-
-## Endpoints
-
-- GET / - service status
-- GET /health - JSON health check
-- GET /webhook - Meta webhook verification
-- POST /webhook - incoming WhatsApp webhook events
-
-## Deploy
-
-Set environment variables in your hosting provider and deploy the repository. The included Procfile starts the service with node bot.js. Configure the deployed HTTPS URL in the Meta developer dashboard.
-
-## Notes
-
-- This project does not scan a QR code or automate a personal WhatsApp Web session. It uses Meta's official business messaging API.
-- Meta messaging rules, templates, opt-in requirements, conversation windows, and applicable charges still apply.
-- Rate-limit and duplicate caches are in-memory. Use Redis or a database for multi-instance production deployments.
-- Image processing temporarily downloads incoming images in memory and sends them to the configured AI provider. Enable this only if your privacy notice and provider settings permit it.
-- Documents, audio, video, interactive flows, and persistent chat history are not implemented yet.
+This uses the official WhatsApp Business Cloud API, not QR pairing or WhatsApp Web automation. Meta opt-in, approved templates, messaging windows, business verification and applicable charges still apply. In-memory deduplication and rate limiting are best-effort on serverless instances; persistent production coordination should be moved to a shared store.
