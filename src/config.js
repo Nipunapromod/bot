@@ -13,6 +13,10 @@ module.exports = {
   graphVersion: process.env.WHATSAPP_GRAPH_VERSION || 'v23.0',
   openaiApiKey: process.env.OPENAI_API_KEY || '',
   openaiModel: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-  openaiBaseUrl: (process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, ''),
+  openaiBaseUrl: (process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\\/$/, ''),
+  tavilyApiKey: process.env.TAVILY_API_KEY || '',
+  supabaseUrl: process.env.SUPABASE_URL || '',
+  supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY || '',
+  dashboardPassword: process.env.DASHBOARD_PASSWORD || '',
   userMessagesPerMinute: Math.max(1, Number(process.env.USER_MESSAGES_PER_MINUTE || 12))
 };
