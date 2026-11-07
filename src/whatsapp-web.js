@@ -12,7 +12,7 @@ function extractMessageText(message) {
 class WhatsAppWebBot extends EventEmitter {
   constructor({ sessionDir, onMessage }) {
     super(); this.sessionDir = sessionDir; this.onMessage = onMessage;
-    this.socket = null; this.starting = false; this.reconnectTimer = null;
+    this.socket = null; this.starting = false; this.reconnectTimer = null; this.manualDisconnect = false; this.qrDataUrl = null;
     this.status = { state: 'disconnected', message: 'Not connected', phone: null };
     this.messageTimes = new Map();
   }
@@ -21,6 +21,7 @@ class WhatsAppWebBot extends EventEmitter {
   }
   async connect() {
     if (this.starting || this.socket) return;
+    this.manualDisconnect = false;
     this.starting = true; this.setStatus('connecting', 'Preparing WhatsApp connection…');
     try {
       await fs.mkdir(this.sessionDir, { recursive: true, mode: 0o700 });
@@ -35,20 +36,25 @@ class WhatsAppWebBot extends EventEmitter {
       sock.ev.on('connection.update', async update => {
         if (update.qr) {
           try {
-            this.emit('qr', await QRCode.toDataURL(update.qr, { width: 280, margin: 2 }));
+            this.qrDataUrl = await QRCode.toDataURL(update.qr, { width: 280, margin: 2 });
+            this.emit('qr', this.qrDataUrl);
             this.setStatus('qr', 'Scan the QR from WhatsApp > Linked devices.');
           } catch { this.setStatus('error', 'Could not generate QR code.'); }
         }
         if (update.connection === 'open') {
           const id = sock.user?.id || '';
+          this.qrDataUrl = null;
           this.setStatus('connected', 'WhatsApp is connected.', { phone: id.split(':')[0].split('@')[0] || null });
           this.emit('qr', null);
         }
         if (update.connection === 'close') {
           const code = update.lastDisconnect?.error?.output?.statusCode;
           this.socket = null;
-          if (code === DisconnectReason.loggedOut) {
+          if (this.manualDisconnect) {
+            this.setStatus('disconnected', 'WhatsApp is disconnected.', { phone: null });
+          } else if (code === DisconnectReason.loggedOut) {
             await fs.rm(this.sessionDir, { recursive: true, force: true }).catch(() => {});
+            this.qrDataUrl = null;
             this.setStatus('disconnected', 'Logged out. Pair again with a new QR code.', { phone: null });
           } else {
             this.setStatus('reconnecting', 'Connection interrupted. Reconnecting…'); this.scheduleReconnect();
@@ -86,14 +92,17 @@ class WhatsAppWebBot extends EventEmitter {
     return this.socket.sendMessage(jid, { text: String(text).slice(0, 4000) });
   }
   async disconnect() {
+    this.manualDisconnect = true;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
     const sock = this.socket; this.socket = null;
     if (sock) { try { sock.end(undefined); } catch {} try { sock.ws?.close(); } catch {} }
     await fs.rm(this.sessionDir, { recursive: true, force: true }).catch(() => {});
+    this.qrDataUrl = null;
     this.setStatus('disconnected', 'WhatsApp has been logged out.', { phone: null }); this.emit('qr', null);
   }
   async stop() {
+    this.manualDisconnect = true;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
     const sock = this.socket; this.socket = null;
